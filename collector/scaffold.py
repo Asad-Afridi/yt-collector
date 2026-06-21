@@ -24,8 +24,8 @@ def scaffold(config):
             if fname.endswith(".csv"):
                 with open(fpath, "w", encoding="utf-8", newline="") as f:
                     f.write(
-                        "Class,Source_URL,Source_Type,Media_Type,"
-                        "Num_Videos,Date_Accessed,License,Notes\n"
+                        "Class,Source_URL,Date_Accessed,License,"
+                        "Keyword,Title,Channel,Duration\n"
                     )
             elif fname.endswith(".json"):
                 with open(fpath, "w", encoding="utf-8") as f:

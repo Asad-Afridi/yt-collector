@@ -12,7 +12,6 @@ import time
 from . import config as cfg
 from . import logger
 
-
 VIDEO_EXTS = (".mp4", ".mkv", ".webm", ".avi")
 
 
@@ -40,7 +39,9 @@ def _handle_bot_block(result):
     """Exit if yt-dlp output indicates a bot-check block."""
     combined = (result.stderr or "") + "\n" + (result.stdout or "")
     if _is_bot_blocked(combined):
-        print("  [ERROR] YouTube blocked the request: sign-in required to confirm you are not a bot.")
+        print(
+            "  [ERROR] YouTube blocked the request: sign-in required to confirm you are not a bot."
+        )
         print("  Provide cookies or a cookies file and retry.")
         sys.exit(1)
 
@@ -109,8 +110,6 @@ def _duration_filter_args(max_duration_seconds):
     return ["--match-filter", f"duration <= {int(max_duration_seconds)}"]
 
 
-
-
 def test_cookies():
     """Test cookie extraction. Returns True if OK."""
     if not USE_COOKIES:
@@ -127,10 +126,19 @@ def test_cookies():
     print(f"  Testing cookie extraction from {BROWSER_COOKIES}...")
     try:
         result = subprocess.run(
-            [*_ytdlp_cmd(), "--cookies-from-browser", BROWSER_COOKIES,
-             "--dump-json", "--no-download", "--playlist-items", "1",
-             "ytsearch1:test"],
-            capture_output=True, text=True, timeout=30,
+            [
+                *_ytdlp_cmd(),
+                "--cookies-from-browser",
+                BROWSER_COOKIES,
+                "--dump-json",
+                "--no-download",
+                "--playlist-items",
+                "1",
+                "ytsearch1:test",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode != 0:
             print(f"  [ERROR] Cookie test failed (exit code {result.returncode}).")
@@ -251,12 +259,16 @@ def download_keyword(config, keyword, class_name, max_downloads=10):
         print(f"  [{idx}/{len(candidates)}] {url}")
         cmd = [
             *_ytdlp_cmd(),
-            "-o", output_template,
+            "-o",
+            output_template,
             "--restrict-filenames",
             "--no-playlist",
-            "--format", video_format,
-            "--format-sort", "res,ext",
-            "--merge-output-format", "mp4",
+            "--format",
+            video_format,
+            "--format-sort",
+            "res,ext",
+            "--merge-output-format",
+            "mp4",
             "--no-overwrites",
             *_cookie_args(),
             *_duration_filter_args(max_duration),
@@ -309,11 +321,15 @@ def download_url(config, url, class_name):
 
     cmd = [
         *_ytdlp_cmd(),
-        "-o", output_template,
+        "-o",
+        output_template,
         "--restrict-filenames",
-        "--format", video_format,
-        "--format-sort", "res,ext",
-        "--merge-output-format", "mp4",
+        "--format",
+        video_format,
+        "--format-sort",
+        "res,ext",
+        "--merge-output-format",
+        "mp4",
         "--no-overwrites",
         *_cookie_args(),
         *_duration_filter_args(max_duration),
@@ -346,7 +362,9 @@ def bulk_download(config, class_name, max_per_keyword):
 
     print(f"\n  Bulk Download")
     print(f"  Class: {class_name} | Resolution: {config['resolution']}p")
-    print(f"  Current: {existing}/{target} | Keywords: {len(keywords)} | Max/keyword: {max_per_keyword}")
+    print(
+        f"  Current: {existing}/{target} | Keywords: {len(keywords)} | Max/keyword: {max_per_keyword}"
+    )
     print(f"  Estimated new downloads: ~{len(keywords) * max_per_keyword}")
 
     for i, kw in enumerate(keywords, 1):
@@ -358,5 +376,3 @@ def bulk_download(config, class_name, max_per_keyword):
             break
 
     logger.print_progress(config)
-
-

@@ -9,7 +9,10 @@ import yaml
 
 
 def load_config(config_path="project.yaml"):
-    """Load and validate the project configuration."""
+    """Load and validate the project configuration.
+    
+    Classes are derived from the keywords file specified in project config.
+    """
     if not os.path.exists(config_path):
         print(f"[ERROR] Config file not found: {config_path}")
         print("  Create a project.yaml or specify path with --config")
@@ -19,13 +22,12 @@ def load_config(config_path="project.yaml"):
         raw = yaml.safe_load(f)
 
     # Validate required sections
-    for key in ("project", "classes"):
-        if key not in raw:
-            print(f"[ERROR] Missing required section '{key}' in {config_path}")
-            sys.exit(1)
+    if "project" not in raw:
+        print(f"[ERROR] Missing required section 'project' in {config_path}")
+        sys.exit(1)
 
     proj = raw["project"]
-    for field in ("name", "target_per_class", "resolution"):
+    for field in ("name", "target_per_class", "resolution", "keywords_file"):
         if field not in proj:
             print(f"[ERROR] Missing 'project.{field}' in config")
             sys.exit(1)
@@ -33,6 +35,7 @@ def load_config(config_path="project.yaml"):
     config = {
         "name": proj["name"],
         "description": proj.get("description", ""),
+        "video_only": bool(proj.get("video_only", False)),
         "target_per_class": int(proj["target_per_class"]),
         "resolution": int(proj["resolution"]),
         "max_duration_seconds": int(proj.get("max_duration_seconds", 3600)),
@@ -44,21 +47,31 @@ def load_config(config_path="project.yaml"):
         "classes": {},
     }
 
-    # Parse classes and flatten keyword categories
-    for cls_name, cls_data in raw["classes"].items():
-        keywords = []
-        kw_data = cls_data.get("keywords", {})
-        if isinstance(kw_data, dict):
-            # Grouped by category - flatten
-            for category, kw_list in kw_data.items():
-                keywords.extend(kw_list)
-        elif isinstance(kw_data, list):
-            # Flat list
-            keywords = kw_data
+    # Load external keywords file (now required)
+    keywords_file = proj.get("keywords_file")
+    config_dir = os.path.dirname(os.path.abspath(config_path))
+    keywords_path = os.path.join(config_dir, keywords_file)
+    
+    if not os.path.exists(keywords_path):
+        print(f"[ERROR] Keywords file not found: {keywords_path}")
+        sys.exit(1)
+    
+    with open(keywords_path, "r", encoding="utf-8") as f:
+        keywords_data = yaml.safe_load(f) or {}
 
+    if not keywords_data:
+        print(f"[ERROR] Keywords file is empty: {keywords_path}")
+        sys.exit(1)
+
+    # Build classes from keywords file
+    for cls_name, kw_list in keywords_data.items():
+        if not isinstance(kw_list, list):
+            print(f"[ERROR] Keywords for class '{cls_name}' must be a list")
+            sys.exit(1)
+        
         config["classes"][cls_name] = {
-            "description": cls_data.get("description", ""),
-            "keywords": keywords,
+            "description": "",  # No description in keywords file
+            "keywords": kw_list,
         }
 
     return config
@@ -77,6 +90,10 @@ def get_keywords(config, class_name):
 def get_video_format(config):
     """Return yt-dlp format string for the configured resolution."""
     res = config["resolution"]
+    # If video_only is set, prefer the best video-only stream at or below
+    # the requested resolution. Otherwise request video+audio with fallback.
+    if config.get("video_only"):
+        return f"bestvideo[height<={res}]"
     return f"bestvideo[height<={res}]+bestaudio/best[height<={res}]"
 
 

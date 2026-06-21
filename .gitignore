@@ -4,6 +4,10 @@ __pycache__/
 
 # Large media files (track with Git LFS or exclude)
 data/
+
+keywords/keywords_*.yaml
+!keywords/keywords_template.yaml
+
 *.mp4
 *.avi
 *.mkv
