@@ -1,18 +1,14 @@
 """
-Config loader and validator for project.yaml.
+Config loader and validator for project.yaml
 """
 
 import os
 import sys
-
 import yaml
 
 
 def load_config(config_path="project.yaml"):
-    """Load and validate the project configuration.
-    
-    Classes are derived from the keywords file specified in project config.
-    """
+    """Load and validate the project configuration. Classes are derived from the keywords file specified in project config."""
     if not os.path.exists(config_path):
         print(f"[ERROR] Config file not found: {config_path}")
         print("  Create a project.yaml or specify path with --config")
@@ -47,15 +43,19 @@ def load_config(config_path="project.yaml"):
         "classes": {},
     }
 
-    # Load external keywords file (now required)
+    # Load external keywords file
     keywords_file = proj.get("keywords_file")
     config_dir = os.path.dirname(os.path.abspath(config_path))
     keywords_path = os.path.join(config_dir, keywords_file)
-    
+
+    # Language identifier comes from the keywords filename suffix,
+    # e.g. "keywords_en.yaml" -> "en", "keywords_zh.yaml" -> "zh".
+    config["language"] = os.path.splitext(os.path.basename(keywords_file))[0][-2:]
+
     if not os.path.exists(keywords_path):
         print(f"[ERROR] Keywords file not found: {keywords_path}")
         sys.exit(1)
-    
+
     with open(keywords_path, "r", encoding="utf-8") as f:
         keywords_data = yaml.safe_load(f) or {}
 
@@ -68,7 +68,7 @@ def load_config(config_path="project.yaml"):
         if not isinstance(kw_list, list):
             print(f"[ERROR] Keywords for class '{cls_name}' must be a list")
             sys.exit(1)
-        
+
         config["classes"][cls_name] = {
             "description": "",  # No description in keywords file
             "keywords": kw_list,
@@ -98,5 +98,5 @@ def get_video_format(config):
 
 
 def get_output_dir(config, class_name):
-    """Return the output directory for a class."""
-    return os.path.join(config["output_dir"], class_name, "Videos")
+    """Return the output directory for a class, scoped to the active language."""
+    return os.path.join(config["output_dir"], class_name, config["language"], "Videos")

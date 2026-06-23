@@ -442,7 +442,7 @@
     <div class="pagination" id="pagination"></div>
 
     <div class="credit">
-      Vibe Coded by Wajahat Ullah 🤍<br>
+      Vibe Coded by Wajahat Ullah 🤍<br />
       SKKU Applied AI, VIS2Know Lab
     </div>
 
@@ -459,9 +459,11 @@
       let decisions = {};
       let statusFilter = 'all';
       let classFilter = 'all';
+      let languageFilter = null;
       let currentPage = 0;
       let focusedIdx = 0;
       let classList = [];
+      let languageList = [];
 
       async function init() {
         const [vRes, dRes, cRes] = await Promise.all([
@@ -475,6 +477,8 @@
 
         document.getElementById('project-title').textContent = config.name + ' — Review';
         classList = config.classes;
+        languageList = config.languages || [];
+        languageFilter = languageList.includes(config.language) ? config.language : (languageList[0] || null);
         buildFilters();
         render();
       }
@@ -491,6 +495,15 @@
         classList.forEach(c => {
           html += `<button class="filter-btn" data-filter="class" data-val="${c}">${c.replace(/_/g, ' ')}</button>`;
         });
+
+        if (languageList.length > 1) {
+          html += '<span class="sep"></span>';
+          languageList.forEach(l => {
+            const active = l === languageFilter ? 'active' : '';
+            html += `<button class="filter-btn ${active}" data-filter="lang" data-val="${l}">${l.toUpperCase()}</button>`;
+          });
+        }
+
         el.innerHTML = html;
         el.addEventListener('click', e => {
           const btn = e.target.closest('.filter-btn');
@@ -498,7 +511,8 @@
           const type = btn.dataset.filter;
           const val = btn.dataset.val;
           if (type === 'status') { statusFilter = val; }
-          else { classFilter = val; }
+          else if (type === 'class') { classFilter = val; }
+          else if (type === 'lang') { languageFilter = val; }
           el.querySelectorAll(`.filter-btn[data-filter="${type}"]`).forEach(b => b.classList.remove('active'));
           btn.classList.add('active');
           currentPage = 0;
@@ -511,13 +525,25 @@
           const st = getStatus(v);
           if (statusFilter !== 'all' && st !== statusFilter) return false;
           if (classFilter !== 'all' && v.cls !== classFilter) return false;
+          if (languageFilter && v.lang !== languageFilter) return false;
+          return true;
+        });
+      }
+
+      // Badge counts ignore the status filter (All/Pending/Accepted/Rejected) so the
+      // four numbers stay stable while only the list below changes. They still scope
+      // to the selected class and language.
+      function getBadgeScope() {
+        return allVideos.filter(v => {
+          if (classFilter !== 'all' && v.cls !== classFilter) return false;
+          if (languageFilter && v.lang !== languageFilter) return false;
           return true;
         });
       }
 
       function render() {
         const filtered = getFiltered();
-        updateStats(filtered);
+        updateStats(getBadgeScope());
         const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
         if (currentPage > pageCount - 1) currentPage = pageCount - 1;
         const start = currentPage * PAGE_SIZE;
@@ -553,6 +579,7 @@
                   <div class="video-name">${v.name}${tag}</div>
                   <div class="video-details">
                     <span>${v.cls.replace(/_/g, ' ')}</span>
+                    <span>${(v.lang || '').toUpperCase()}</span>
                     <span>${v.size_mb} MB</span>
                   </div>
                 </div>
@@ -649,13 +676,23 @@
       }
 
       async function decide(path, status) {
-        if (status === 'pending') delete decisions[path];
-        else decisions[path] = status;
-        await fetch('/api/decide', {
+        const res = await fetch('/api/decide', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({path, status}),
         });
+        const { path: newPath } = await res.json();
+
+        delete decisions[path];
+        if (status !== 'pending') decisions[newPath] = status;
+
+        if (newPath !== path) {
+          const video = allVideos.find(v => v.path === path);
+          if (video) {
+            video.path = newPath;
+            video.status_hint = '';
+          }
+        }
         render();
       }
 

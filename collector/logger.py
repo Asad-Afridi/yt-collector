@@ -2,10 +2,21 @@
 CSV reference logging and deduplication.
 """
 
-import csv
-import json
 import os
+import csv
 from datetime import datetime
+
+
+CSV_HEADER = [
+    "Class",
+    "Source_URL",
+    "Date_Accessed",
+    "License",
+    "Keyword",
+    "Title",
+    "Channel",
+    "Duration",
+]
 
 
 def get_csv_path(config):
@@ -18,17 +29,14 @@ def get_decisions_path(config):
     return os.path.join(config["output_dir"], "review_decisions.json")
 
 
-CSV_HEADER = [
-    "Class", "Source_URL", "Date_Accessed", "License",
-    "Keyword", "Title", "Channel", "Duration",
-]
-
-
 def log_entries(config, class_name, entries, keyword):
     """Log video metadata entries to the CSV."""
     csv_path = get_csv_path(config)
     with open(csv_path, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
+        # Write header if file is empty
+        if os.path.getsize(csv_path) == 0:
+            writer.writerow(CSV_HEADER)
         for entry in entries:
             url = entry.get("webpage_url") or entry.get("url", "")
             title = entry.get("title", "Unknown")
@@ -36,41 +44,65 @@ def log_entries(config, class_name, entries, keyword):
             license_info = entry.get("license", "YouTube Standard")
             duration = entry.get("duration", 0)
 
-            writer.writerow([
-                class_name,
-                url,
-                datetime.now().strftime("%Y-%m-%d"),
-                license_info,
-                keyword,
-                title,
-                channel,
-                str(duration) if duration is not None else "",
-            ])
+            writer.writerow(
+                [
+                    class_name,
+                    url,
+                    datetime.now().strftime("%Y-%m-%d"),
+                    license_info,
+                    keyword,
+                    title,
+                    channel,
+                    str(duration) if duration is not None else "",
+                ]
+            )
 
 
-def log_simple(config, class_name, source, num_videos, notes=""):
-    """Fallback logging when metadata is unavailable."""
-    csv_path = get_csv_path(config)
-    keyword = ""
-    if source.startswith("YouTube search:"):
-        keyword = source.replace("YouTube search:", "", 1).strip()
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            class_name, source, datetime.now().strftime("%Y-%m-%d"),
-            "YouTube Standard", keyword, "", "", "",
-        ])
-
-
-def count_videos(config, class_name):
-    """Count video files on disk for a class."""
-    class_dir = os.path.join(config["output_dir"], class_name, "Videos")
+def count_videos(config, class_name, language=None):
+    """Count video files on disk for a class, optionally filtered by language.
+    If language is specified (e.g., 'en', 'zh'), counts only that language folder.
+    """
+    class_dir = os.path.join(config["output_dir"], class_name)
     count = 0
-    if os.path.exists(class_dir):
-        for root, dirs, files in os.walk(class_dir):
-            dirs[:] = [d for d in dirs if d != "_rejected"]
-            count += len([f for f in files if f.lower().endswith((".mp4", ".mkv", ".webm"))])
+
+    if language:
+        # Count videos in a specific language folder
+        video_dir = os.path.join(class_dir, language, "Videos")
+        if os.path.exists(video_dir):
+            for root, dirs, files in os.walk(video_dir):
+                dirs[:] = [d for d in dirs if d != "_rejected"]
+                count += len(
+                    [f for f in files if f.lower().endswith((".mp4", ".mkv", ".webm"))]
+                )
+    else:
+        # Backward compat: count all videos in the class
+        video_dir = os.path.join(class_dir, "Videos")
+        if os.path.exists(video_dir):
+            for root, dirs, files in os.walk(video_dir):
+                dirs[:] = [d for d in dirs if d != "_rejected"]
+                count += len(
+                    [f for f in files if f.lower().endswith((".mp4", ".mkv", ".webm"))]
+                )
+
     return count
+
+
+def get_language_folders(config, class_name):
+    """Return a sorted list of language folders present for a class."""
+    class_dir = os.path.join(config["output_dir"], class_name)
+    if not os.path.exists(class_dir):
+        return []
+
+    languages = []
+    for item in sorted(os.listdir(class_dir)):
+        item_path = os.path.join(class_dir, item)
+        if os.path.isdir(item_path) and item not in {"Videos", "_rejected"}:
+            # Check if it has a Videos subfolder
+            video_path = os.path.join(item_path, "Videos")
+            if os.path.exists(video_path):
+                languages.append(item)
+
+    return languages
 
 
 def deduplicate(config):
@@ -108,7 +140,10 @@ def deduplicate(config):
 
 
 def get_progress(config):
-    """Get download progress for all classes."""
+    """Get download progress for all classes and languages.
+
+    Returns nested dict: {class: {language: {count, target, pct}, ...}, ...}
+    """
     target = config["target_per_class"]
     progress = {}
     # Derive class list from actual folders under output_dir. This avoids
@@ -138,28 +173,68 @@ def get_progress(config):
             if not has_video_files:
                 continue
 
-        count = count_videos(config, name)
-        progress[name] = {
-            "count": count,
-            "target": target,
-            "pct": min(100, round(count / target * 100)) if target > 0 else 0,
-        }
+        # Check for language folders
+        languages = get_language_folders(config, name)
+
+        if languages:
+            # New structure: language subfolders
+            progress[name] = {}
+            for lang in languages:
+                count = count_videos(config, name, language=lang)
+                progress[name][lang] = {
+                    "count": count,
+                    "target": target,
+                    "pct": min(100, round(count / target * 100)) if target > 0 else 0,
+                }
+        else:
+            # Legacy: single Videos folder
+            count = count_videos(config, name)
+            progress[name] = {
+                "count": count,
+                "target": target,
+                "pct": min(100, round(count / target * 100)) if target > 0 else 0,
+            }
+
     return progress
 
 
 def print_progress(config):
-    """Print a formatted progress bar for all classes."""
+    """Print a formatted progress bar for all classes and languages."""
     progress = get_progress(config)
     target = config["target_per_class"]
-    bar_width = 40
+    bar_width = 35
 
-    print(f"\n{'='*60}")
+    print(f"\n{'='*75}")
     print(f"  {config['name']} - Collection Progress")
-    print(f"{'='*60}")
+    print(f"{'='*75}")
 
     for cls_name, data in progress.items():
-        filled = int(bar_width * data["count"] / target) if target > 0 else 0
-        bar = "#" * filled + "-" * (bar_width - filled)
-        print(f"  {cls_name:20s}: {data['count']:4d}/{target}  [{bar}] {data['pct']}%")
+        # Check if this class has language subfolders
+        if isinstance(data, dict) and any(
+            isinstance(v, dict) and "count" in v for v in data.values()
+        ):
+            # Has language structure
+            print(f"\n  {cls_name}:")
+            for lang, lang_data in sorted(data.items()):
+                if isinstance(lang_data, dict) and "count" in lang_data:
+                    count = lang_data["count"]
+                    pct = lang_data["pct"]
+                    filled = (
+                        min(bar_width, int(bar_width * count / target))
+                        if target > 0
+                        else 0
+                    )
+                    bar = "#" * filled + "-" * (bar_width - filled)
+                    print(f"    {lang:4s}: {count:4d}/{target}  [{bar}] {pct:3d}%")
+        else:
+            # Legacy structure (single Videos folder)
+            if isinstance(data, dict) and "count" in data:
+                count = data["count"]
+                pct = data["pct"]
+                filled = (
+                    min(bar_width, int(bar_width * count / target)) if target > 0 else 0
+                )
+                bar = "#" * filled + "-" * (bar_width - filled)
+                print(f"  {cls_name:20s}: {count:4d}/{target}  [{bar}] {pct:3d}%")
 
     print()

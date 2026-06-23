@@ -6,7 +6,7 @@ __pycache__/
 data/
 
 keywords/keywords_*.yaml
-!keywords/keywords_template.yaml
+!keywords/keywords_--.yaml
 
 *.mp4
 *.avi

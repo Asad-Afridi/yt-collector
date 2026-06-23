@@ -1,19 +1,23 @@
-"""Video Review Tool server and API."""
+"""Video Review Tool server and API"""
 
-import http.server
-import json
-import mimetypes
 import os
+import json
 import shutil
+import mimetypes
+import webbrowser
+import http.server
 import socketserver
 import urllib.parse
-import webbrowser
 
 from .. import logger
 
 PAGE_SIZE = 20
 _TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates", "index.html")
 _HTML_CACHE = None
+
+# Physical folders that mirror a review decision on disk. "pending" has no
+# folder - unreviewed videos stay as direct children of Videos/.
+STATUS_FOLDERS = {"accepted": "_accepted", "rejected": "_rejected"}
 
 
 def _load_template():
@@ -26,29 +30,47 @@ def _load_template():
 
 
 def _scan_videos(config):
-    """Scan all video files in configured class folders."""
+    """Scan all video files in configured class folders, across all language subfolders."""
     videos = []
     for cls_name in config["classes"]:
-        videos_dir = os.path.join(config["output_dir"], cls_name, "Videos")
-        if not os.path.exists(videos_dir):
-            continue
-        for root, dirs, files in os.walk(videos_dir):
-            for f in sorted(files):
-                if f.lower().endswith((".mp4", ".mkv", ".webm", ".avi")):
-                    full_path = os.path.join(root, f)
-                    rel_path = os.path.relpath(full_path, config["output_dir"])
-                    status_hint = "rejected" if "_rejected" in rel_path.split(os.sep) else ""
-                    size_mb = round(os.path.getsize(full_path) / (1024 * 1024), 1)
-                    videos.append(
-                        {
-                            "name": f,
-                            "path": rel_path,
-                            "cls": cls_name,
-                            "size_mb": size_mb,
-                            "status_hint": status_hint,
-                        }
-                    )
+        for lang in logger.get_language_folders(config, cls_name):
+            videos_dir = os.path.join(config["output_dir"], cls_name, lang, "Videos")
+            if not os.path.exists(videos_dir):
+                continue
+            for root, dirs, files in os.walk(videos_dir):
+                for f in sorted(files):
+                    if f.lower().endswith((".mp4", ".mkv", ".webm", ".avi")):
+                        full_path = os.path.join(root, f)
+                        rel_path = os.path.relpath(full_path, config["output_dir"])
+                        parts = rel_path.split(os.sep)
+                        status_hint = next(
+                            (
+                                status
+                                for status, folder in STATUS_FOLDERS.items()
+                                if folder in parts
+                            ),
+                            "",
+                        )
+                        size_mb = round(os.path.getsize(full_path) / (1024 * 1024), 1)
+                        videos.append(
+                            {
+                                "name": f,
+                                "path": rel_path,
+                                "cls": cls_name,
+                                "lang": lang,
+                                "size_mb": size_mb,
+                                "status_hint": status_hint,
+                            }
+                        )
     return videos
+
+
+def _list_languages(config):
+    """Return the sorted set of language folders present across all classes."""
+    languages = set()
+    for cls_name in config["classes"]:
+        languages.update(logger.get_language_folders(config, cls_name))
+    return sorted(languages)
 
 
 def _load_decisions(config):
@@ -134,6 +156,8 @@ def _create_handler(config):
                     {
                         "name": config["name"],
                         "classes": list(config["classes"].keys()),
+                        "languages": _list_languages(config),
+                        "language": config["language"],
                     }
                 )
 
@@ -148,29 +172,40 @@ def _create_handler(config):
                 length = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(length))
                 decisions = _load_decisions(config)
-                if body["status"] == "pending":
-                    decisions.pop(body["path"], None)
-                else:
-                    decisions[body["path"]] = body["status"]
-                _save_decisions(config, decisions)
-                self._send_json({"ok": True})
+                path = body["path"]
+                status = body["status"]
 
-            elif self.path == "/api/apply":
-                decisions = _load_decisions(config)
-                moved = 0
-                for path, status in decisions.items():
-                    if status == "rejected":
-                        full = os.path.join(config["output_dir"], path)
-                        if os.path.exists(full):
-                            reject_dir = os.path.join(
-                                os.path.dirname(full), "_rejected"
-                            )
-                            os.makedirs(reject_dir, exist_ok=True)
-                            shutil.move(
-                                full, os.path.join(reject_dir, os.path.basename(full))
-                            )
-                            moved += 1
-                self._send_json({"moved": moved})
+                # If the video is currently sitting in a status folder (_accepted/
+                # or _rejected/) that no longer matches the new status, move it
+                # back out to Videos/ so disk state matches. A later "clean" run
+                # will place it into the right folder for the new status, if any.
+                path_parts = path.split(os.sep)
+                current_folder = next(
+                    (
+                        folder
+                        for folder in STATUS_FOLDERS.values()
+                        if folder in path_parts
+                    ),
+                    None,
+                )
+                if current_folder and STATUS_FOLDERS.get(status) != current_folder:
+                    full = os.path.join(config["output_dir"], path)
+                    if os.path.exists(full):
+                        restored_dir = os.path.dirname(os.path.dirname(full))
+                        restored_full = os.path.join(
+                            restored_dir, os.path.basename(full)
+                        )
+                        if not os.path.exists(restored_full):
+                            shutil.move(full, restored_full)
+                            decisions.pop(path, None)
+                            path = os.path.relpath(restored_full, config["output_dir"])
+
+                if status == "pending":
+                    decisions.pop(path, None)
+                else:
+                    decisions[path] = status
+                _save_decisions(config, decisions)
+                self._send_json({"ok": True, "path": path})
             else:
                 self.send_error(404)
 
@@ -273,16 +308,31 @@ def serve(config, port=8765):
             print("\n  Shutting down.")
 
 
-def clean_rejected(config):
-    """Move rejected videos to _rejected/ folders."""
+def apply_decisions(config):
+    """Move accepted/rejected videos into their status folders and
+    update decision keys. Returns a dict of how many videos were moved per status.
+    """
     decisions = _load_decisions(config)
-    moved = 0
+    updated = {}
+    moved = {status: 0 for status in STATUS_FOLDERS}
+
     for path, status in decisions.items():
-        if status == "rejected":
+        folder_name = STATUS_FOLDERS.get(status)
+        if folder_name:
             full = os.path.join(config["output_dir"], path)
-            if os.path.exists(full):
-                reject_dir = os.path.join(os.path.dirname(full), "_rejected")
-                os.makedirs(reject_dir, exist_ok=True)
-                shutil.move(full, os.path.join(reject_dir, os.path.basename(full)))
-                moved += 1
+            if folder_name not in path.split(os.sep) and os.path.exists(full):
+                dest_dir = os.path.join(os.path.dirname(full), folder_name)
+                os.makedirs(dest_dir, exist_ok=True)
+                dest = os.path.join(dest_dir, os.path.basename(full))
+                try:
+                    shutil.move(full, dest)
+                except OSError as e:
+                    print(f"  [WARN] Could not move {path}: {e}")
+                    updated[path] = status
+                    continue
+                path = os.path.relpath(dest, config["output_dir"])
+                moved[status] += 1
+        updated[path] = status
+
+    _save_decisions(config, updated)
     return moved

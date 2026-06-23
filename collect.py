@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-YouTube Video Collection Toolkit - CLI Entry Point
+YouTube Video Collection Toolkit
 
 Usage:
     python collect.py init                              # Scaffold folders
@@ -11,15 +11,16 @@ Usage:
     python collect.py status                            # Show progress
     python collect.py review                            # Launch review UI
     python collect.py dedup                             # Deduplicate references
-    python collect.py clean                             # Move rejected videos
+    python collect.py clean                             # Move accepted/rejected videos to status folders
+    python collect.py export --dest <path>              # Copy accepted videos to a dataset folder
 """
 
 import sys
 import argparse
 
 from collector import config as cfg
-from collector import downloader, logger, scaffold
-from collector.reviewer import server as reviewer
+from collector.reviewer import server
+from collector import downloader, exporter, logger, scaffold
 
 
 def cmd_init(args, config):
@@ -28,15 +29,19 @@ def cmd_init(args, config):
     scaffold.print_tree(config)
     created = scaffold.scaffold(config)
     print(f"\n  Created {len(created)} directories and files.")
-    print("  Edit project.yaml to customize classes and keywords.")
+    print("  Edit project.yaml to define download behavior and specify keywords file.")
     print("  Then run: python collect.py download --class <ClassName>")
 
 
 def cmd_download(args, config):
     """Download videos."""
+    scaffold.scaffold(config)
+
     browser = args.browser or config.get("browser", "chrome")
     cookies_file = config.get("cookies_file", "")
-    downloader.init(browser=browser, no_cookies=args.no_cookies, cookies_file=cookies_file)
+    downloader.init(
+        browser=browser, no_cookies=args.no_cookies, cookies_file=cookies_file
+    )
 
     if args.all:
         for cls_name in cfg.get_class_names(config):
@@ -46,7 +51,9 @@ def cmd_download(args, config):
             downloader.bulk_download(config, cls_name, args.max_per_keyword)
     elif args.cls:
         if args.keyword:
-            downloader.download_keyword(config, args.keyword, args.cls, args.max_per_keyword)
+            downloader.download_keyword(
+                config, args.keyword, args.cls, args.max_per_keyword
+            )
         elif args.url:
             downloader.download_url(config, args.url, args.cls)
         else:
@@ -62,21 +69,24 @@ def cmd_status(args, config):
 
     csv_path = logger.get_csv_path(config)
     try:
-        import csv as csv_mod
+        import csv
+
         with open(csv_path, "r", encoding="utf-8") as f:
-            rows = list(csv_mod.DictReader(f))
+            rows = list(csv.DictReader(f))
         urls = [r["Source_URL"] for r in rows]
         unique = len(set(urls))
         print(f"  References: {len(rows)} rows ({unique} unique URLs)")
         if len(rows) > unique:
-            print(f"  Run 'python collect.py dedup' to remove {len(rows) - unique} duplicates")
+            print(
+                f"  Run 'python collect.py dedup' to remove {len(rows) - unique} duplicates"
+            )
     except FileNotFoundError:
         print("  No references yet. Run download first.")
 
 
 def cmd_review(args, config):
     """Launch review UI."""
-    reviewer.serve(config, port=args.port)
+    server.serve(config, port=args.port)
 
 
 def cmd_dedup(args, config):
@@ -89,9 +99,29 @@ def cmd_dedup(args, config):
 
 
 def cmd_clean(args, config):
-    """Move rejected videos to _rejected/ folders."""
-    moved = reviewer.clean_rejected(config)
-    print(f"\n  Moved {moved} rejected videos to _rejected/ folders.")
+    """Move accepted/rejected videos into their status folders."""
+    moved = server.apply_decisions(config)
+    print(f"\n  Moved {moved['accepted']} accepted videos to _accepted/ folders.")
+    print(f"  Moved {moved['rejected']} rejected videos to _rejected/ folders.")
+
+
+def cmd_export(args, config):
+    """Copy accepted videos (and matching metadata) to an external dataset folder"""
+    print(f"\n  Exporting accepted videos to: {args.dest}")
+    stats = exporter.export_dataset(config, args.dest)
+
+    for cls_name, count in sorted(stats["per_class"].items()):
+        print(f"    {cls_name}: {count} copied")
+
+    skip_note = (
+        f", {stats['skipped_existing']} already present (skipped)"
+        if stats["skipped_existing"]
+        else ""
+    )
+    print(f"\n  Done. {stats['copied']} videos copied{skip_note}.")
+    print(
+        f"  Metadata: {stats['metadata_rows']} rows appended to source_references.csv"
+    )
 
 
 def main():
@@ -99,7 +129,9 @@ def main():
         description="YouTube Video Collection Toolkit",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--config", default="project.yaml", help="Path to project config")
+    parser.add_argument(
+        "--config", default="project.yaml", help="Path to project config"
+    )
     sub = parser.add_subparsers(dest="command", help="Available commands")
 
     # init
@@ -111,7 +143,9 @@ def main():
     dl.add_argument("--all", action="store_true", help="Download all classes")
     dl.add_argument("--keyword", help="Search a specific keyword")
     dl.add_argument("--url", help="Download a specific URL")
-    dl.add_argument("--max-per-keyword", type=int, default=10, help="Max videos per keyword")
+    dl.add_argument(
+        "--max-per-keyword", type=int, default=10, help="Max videos per keyword"
+    )
     dl.add_argument("--browser", help="Browser for cookies (overrides project.yaml)")
     dl.add_argument("--no-cookies", action="store_true", help="Skip cookie auth")
 
@@ -126,7 +160,15 @@ def main():
     sub.add_parser("dedup", help="Deduplicate references CSV")
 
     # clean
-    sub.add_parser("clean", help="Move rejected videos to _rejected/")
+    sub.add_parser(
+        "clean", help="Move accepted/rejected videos to their status folders"
+    )
+
+    # export
+    exp = sub.add_parser(
+        "export", help="Copy accepted videos to an external dataset folder"
+    )
+    exp.add_argument("--dest", required=True, help="Destination directory")
 
     args = parser.parse_args()
 
@@ -143,6 +185,7 @@ def main():
         "review": cmd_review,
         "dedup": cmd_dedup,
         "clean": cmd_clean,
+        "export": cmd_export,
     }
 
     commands[args.command](args, config)

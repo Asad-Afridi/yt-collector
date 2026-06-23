@@ -1,21 +1,23 @@
 """
-Folder structure scaffolding from project config.
+Folder structure scaffolding from project config
 """
 
 import os
 
 
 def scaffold(config):
-    """Create the full folder tree based on project config."""
+    """Create the per-language folder tree for every class in the active keywords file."""
     output_dir = config["output_dir"]
     classes = config["classes"]
+    language = config["language"]
 
     created = []
 
     for cls_name in classes:
-        vid_dir = os.path.join(output_dir, cls_name, "Videos")
-        os.makedirs(vid_dir, exist_ok=True)
-        created.append(vid_dir)
+        vid_dir = os.path.join(output_dir, cls_name, language, "Videos")
+        if not os.path.exists(vid_dir):
+            os.makedirs(vid_dir, exist_ok=True)
+            created.append(vid_dir)
 
     # Create tracking files if they don't exist
     for fname in ("source_references.csv", "review_decisions.json"):
@@ -39,6 +41,7 @@ def print_tree(config):
     """Print the folder tree that will be created."""
     output_dir = config["output_dir"]
     classes = config["classes"]
+    language = config["language"]
 
     print(f"\n  {output_dir}/")
     cls_list = list(classes.keys())
@@ -47,4 +50,5 @@ def print_tree(config):
         prefix = "  +-- " if is_last else "  |-- "
         child_prefix = "      " if is_last else "  |   "
         print(f"{prefix}{cls_name}/")
-        print(f"{child_prefix}+-- Videos/")
+        print(f"{child_prefix}+-- {language}/")
+        print(f"{child_prefix}    +-- Videos/")

@@ -1,18 +1,23 @@
 """
-YouTube video download engine using yt-dlp.
+YouTube video download engine using yt-dlp
 """
 
-import json
 import os
+import sys
+import json
+import time
 import random
 import subprocess
-import sys
-import time
 
-from . import config as cfg
 from . import logger
+from . import config as cfg
 
 VIDEO_EXTS = (".mp4", ".mkv", ".webm", ".avi")
+YOUTUBE_ID_LENGTH = 11
+YTDLP = None
+BROWSER_COOKIES = "chrome"
+USE_COOKIES = True
+COOKIES_FILE = ""
 
 
 def _validate_ytdlp_cmd(cmd):
@@ -70,12 +75,6 @@ def _find_ytdlp():
     print("[ERROR] yt-dlp not found in the active environment.")
     print("  Install it with: pip install yt-dlp")
     sys.exit(1)
-
-
-YTDLP = None
-BROWSER_COOKIES = "chrome"
-USE_COOKIES = True
-COOKIES_FILE = ""
 
 
 def init(browser="chrome", no_cookies=False, cookies_file=""):
@@ -177,12 +176,14 @@ def get_metadata(query_or_url, max_results=10, is_search=True):
 
 
 def _list_video_basenames(output_dir):
-    """Return a set of video basenames (no extension) under output_dir."""
+    """Return a set of video basenames (no extension) under output_dir.
+    Includes _rejected/ so previously rejected videos are still treated as
+    "already downloaded" and are not pulled again on a future run.
+    """
     basenames = set()
     if not os.path.exists(output_dir):
         return basenames
     for root, dirs, files in os.walk(output_dir):
-        dirs[:] = [d for d in dirs if d != "_rejected"]
         for fname in files:
             if fname.lower().endswith(VIDEO_EXTS):
                 basenames.add(os.path.splitext(fname)[0])
@@ -193,8 +194,30 @@ def _list_video_ids(output_dir):
     """Return a set of video IDs inferred from existing filenames."""
     ids = set()
     for base in _list_video_basenames(output_dir):
-        if "_" in base:
-            ids.add(base.rsplit("_", 1)[-1])
+        if len(base) > YOUTUBE_ID_LENGTH and base[-(YOUTUBE_ID_LENGTH + 1)] == "_":
+            ids.add(base[-YOUTUBE_ID_LENGTH:])
+    return ids
+
+
+def _reviewed_video_ids(config, class_name):
+    """Return video IDs already reviewed (accepted or rejected) for this class
+    and language. Sourced from review_decisions.json rather than the filesystem,
+    so a video stays skipped even after its file has been deleted to save disk space.
+    """
+    path = logger.get_decisions_path(config)
+    if not os.path.exists(path):
+        return set()
+    with open(path, "r", encoding="utf-8") as f:
+        decisions = json.load(f)
+
+    prefix = os.path.join(class_name, config["language"]) + os.sep
+    ids = set()
+    for rel_path in decisions:
+        if not rel_path.startswith(prefix):
+            continue
+        base = os.path.splitext(os.path.basename(rel_path))[0]
+        if len(base) > YOUTUBE_ID_LENGTH and base[-(YOUTUBE_ID_LENGTH + 1)] == "_":
+            ids.add(base[-YOUTUBE_ID_LENGTH:])
     return ids
 
 
@@ -230,7 +253,7 @@ def download_keyword(config, keyword, class_name, max_downloads=10):
     print(f"  Output   : {output_dir}")
     print(f"{'='*60}")
 
-    existing_ids = _list_video_ids(output_dir)
+    existing_ids = _list_video_ids(output_dir) | _reviewed_video_ids(config, class_name)
     entries = get_metadata(keyword, max_downloads, is_search=True)
     if not entries:
         print("  [WARN] No metadata results. Skipping download.")
@@ -315,7 +338,10 @@ def download_url(config, url, class_name):
 
     entry = entries[0]
     vid = entry.get("id")
-    if vid and vid in _list_video_ids(output_dir):
+    if vid and (
+        vid in _list_video_ids(output_dir)
+        or vid in _reviewed_video_ids(config, class_name)
+    ):
         print("  Already downloaded. Skipping.")
         return 0
 
@@ -358,10 +384,13 @@ def bulk_download(config, class_name, max_per_keyword):
 
     keywords = cfg.get_keywords(config, class_name)
     target = config["target_per_class"]
-    existing = logger.count_videos(config, class_name)
+    language = config["language"]
+    existing = logger.count_videos(config, class_name, language=language)
 
     print(f"\n  Bulk Download")
-    print(f"  Class: {class_name} | Resolution: {config['resolution']}p")
+    print(
+        f"  Class: {class_name} | Language: {language} | Resolution: {config['resolution']}p"
+    )
     print(
         f"  Current: {existing}/{target} | Keywords: {len(keywords)} | Max/keyword: {max_per_keyword}"
     )
@@ -370,7 +399,7 @@ def bulk_download(config, class_name, max_per_keyword):
     for i, kw in enumerate(keywords, 1):
         print(f"\n  === [{i}/{len(keywords)}] ===")
         download_keyword(config, kw, class_name, max_per_keyword)
-        current = logger.count_videos(config, class_name)
+        current = logger.count_videos(config, class_name, language=language)
         if current >= target:
             print(f"\n  Reached {target} videos for {class_name}! Stopping early.")
             break
