@@ -4,7 +4,7 @@ A config-driven CLI for collecting, organizing, and reviewing YouTube videos for
 
 ## Setup
 
-1. Create a virtual environment:
+1. Create a virtual environment, for example:
 
 ```bash
 python -m venv env
@@ -33,7 +33,7 @@ Runtime dependencies:
 
 ### Project Config (project.yaml)
 
-Copy `project.example.yaml` to `project.yaml` and edit it to define your dataset and download behavior:
+Rename `project.example.yaml` to `project.yaml` and edit it to define your dataset and download behavior:
 
 ```yaml
 project:
@@ -45,7 +45,6 @@ project:
   max_duration_seconds: 3600
   browser: chrome
   cookies_file: ""  # optional cookies.txt to avoid closing your browser
-  # If true, yt-dlp will download video-only streams (no audio)
   video_only: false
   enable_remote_components: true
   sleep_interval: [10, 20]
@@ -56,11 +55,7 @@ project:
 
 ### Keywords File (keywords/keywords_*.yaml)
 
-Keywords are now stored in separate language files under the `keywords/` directory. The `keywords_file` setting in project.yaml points to the file to use.
-
-**Available keyword files:**
-- `keywords/keywords_en.yaml` — English keywords (default)
-- `keywords/keywords_template.yaml` — Template for creating new language files
+Keywords are stored in separate language files under the `keywords/` directory. The `keywords_file` setting in project.yaml points to the file to use. Note that each keyword file must be named `keywords_<language>.yaml`, where `<language>` is a two-letter language code (e.g., `en` for English, `es` for Spanish). The default template is `keywords_--.yaml`.
 
 **Structure of keyword files:**
 ```yaml
@@ -83,18 +78,19 @@ To use different language keywords:
 3. Update `project.yaml`: `keywords_file: "./keywords/keywords_es.yaml"`
 4. Run your collector — it automatically loads the new language keywords
 
-See `keywords/keywords_template.yaml` for a starting template when creating new language files.
+See `keywords/keywords_--.yaml` for a starting template when creating new language files.
 
 ## Usage
 
 ```bash
-python collect.py init
-python collect.py download --class MyClass
-python collect.py download --all
-python collect.py status
-python collect.py review
-python collect.py dedup
-python collect.py clean
+python collect.py init # Initialize the project and create the output directory
+python collect.py download --class MyClass # Download videos for a specific class
+python collect.py download --all # Download videos for all classes
+python collect.py status # Show download status for all classes across all languages
+python collect.py review # Start the review UI
+python collect.py dedup # Deduplicate references
+python collect.py clean # Clean up the output directory by properly organizing rejected and accepted videos
+python collect.py export # Export the accepted videos to a destination directory
 ```
 
 If you are using this repo while it is under active development, pull updates periodically:
@@ -111,6 +107,7 @@ python collect.py download --class MyClass --url "..."
 python collect.py download --class MyClass --max-per-keyword 15
 python collect.py download --class MyClass --no-cookies
 python collect.py download --class MyClass --browser edge
+python collect.py export --dest "./exported_data"
 ```
 
 ## Review Tool
@@ -118,6 +115,5 @@ python collect.py download --class MyClass --browser edge
 The review UI runs at `http://localhost:8765`:
 
 - Click-to-play, so videos only stream on demand
-- Pagination (20 per page)
 - Keyboard shortcuts: `A` accept, `R` reject, `U` undo, `↑↓` navigate, `Space` play
-- Filters by class and review status
+- Filters by class, language, and review status
